@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+.vscode/
+*.log
+dynamic_config.json
+preset_ref_images/
