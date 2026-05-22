@@ -10,6 +10,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core import AstrBotConfig
 from astrbot.core.message.components import Image, Plain, Node, Nodes, At, Reply
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
+from astrbot.core.star.star import star_map
 
 # 导入模块
 from .data_manager import DataManager
@@ -483,7 +484,48 @@ class FigurineProPlugin(Star):
 
         return "", ""
 
-    def _build_persona_prompt(self, scene_prompt: str = "", extra_request: str = "") -> str:
+    async def _get_life_scheduler_outfit_text(self) -> str:
+        """从 Life Scheduler 插件读取今日穿搭，用于人设拍照提示词联动。"""
+        if not self._get_conf_bool("persona_use_life_scheduler_outfit", True):
+            return ""
+
+        try:
+            plugin_names = {"astrbot_plugin_life_scheduler", "life_scheduler"}
+            scheduler = None
+            for metadata in star_map.values():
+                if not getattr(metadata, "activated", False):
+                    continue
+                if str(getattr(metadata, "name", "") or "") not in plugin_names:
+                    continue
+                candidate = getattr(metadata, "star_cls", None)
+                if candidate and hasattr(candidate, "get_life_context"):
+                    scheduler = candidate
+                    break
+
+            if not scheduler:
+                return ""
+
+            life_ctx = await scheduler.get_life_context()
+            if not isinstance(life_ctx, dict):
+                return ""
+
+            outfit = str(life_ctx.get("outfit") or "").strip()
+            style = ""
+            meta = life_ctx.get("meta")
+            if isinstance(meta, dict):
+                style = str(meta.get("style") or "").strip()
+
+            if not outfit:
+                return ""
+
+            if style and style not in outfit:
+                return f"今日穿搭风格：{style}；今日穿搭：{outfit}"
+            return f"今日穿搭：{outfit}"
+        except Exception as e:
+            logger.debug(f"FigurinePro: 读取 Life Scheduler 今日穿搭失败: {e}")
+            return ""
+
+    async def _build_persona_prompt(self, scene_prompt: str = "", extra_request: str = "") -> str:
         """
         构建人设图片的完整提示词
 
@@ -497,6 +539,7 @@ class FigurineProPlugin(Star):
         persona_name = self.conf.get("persona_name", "小助手")
         persona_desc = self.conf.get("persona_description", "一个可爱的二次元女孩")
         photo_style = self.conf.get("persona_photo_style", "日常生活风格，自然光线，真实感")
+        life_outfit = await self._get_life_scheduler_outfit_text()
 
         # [修复] 清理人设描述，防止包含框架系统指令
         # 仅保留纯描述部分，截断遇到的 '# 标题' 或 JSON 结构
@@ -516,6 +559,9 @@ class FigurineProPlugin(Star):
                 clean_lines.append(line)
             if clean_lines:
                 persona_desc = " ".join(clean_lines)
+
+        if life_outfit:
+            persona_desc = f"{persona_desc}。{life_outfit}。拍照时必须严格体现今日穿搭，不要替换成其他服装。"
 
         # [修复] 清理 extra_request，防止 LLM 幻觉将系统指令作为参数传入
         if extra_request:
@@ -5306,7 +5352,7 @@ class FigurineProPlugin(Star):
         logger.info(f"人设拍照：场景匹配结果 scene={scene_name}, scene_hint={scene_hint or '无'}")
 
         # 4. 构建完整提示词
-        full_prompt = self._build_persona_prompt(scene_prompt, extra_request)
+        full_prompt = await self._build_persona_prompt(scene_prompt, extra_request)
         full_prompt += " " + self._build_current_time_persona_hint()
         if user_images:
             persona_ref_text = " ".join([str(scene_hint or ""), str(extra_request or "")])
@@ -5488,7 +5534,7 @@ class FigurineProPlugin(Star):
         scene_name, scene_prompt = self._match_persona_scene(context_text)
 
         # 构建提示词
-        full_prompt = self._build_persona_prompt(scene_prompt, extra_request)
+        full_prompt = await self._build_persona_prompt(scene_prompt, extra_request)
         full_prompt += " " + self._build_current_time_persona_hint()
         if user_images:
             if "合影" in ref_text:
@@ -5648,6 +5694,22 @@ class FigurineProPlugin(Star):
         msg += f"触发词: {', '.join(trigger_keywords[:5])}{'...' if len(trigger_keywords) > 5 else ''}"
 
         yield event.chain_result([Plain(msg)])
+
+    @filter.command("人设日程穿搭", aliases={"人设今日穿搭", "日程穿搭"}, prefix_optional=True)
+    async def on_persona_life_outfit(self, event: AstrMessageEvent, ctx=None):
+        """查看人设拍照当前读取到的日程穿搭联动内容（管理员）"""
+        if not self.is_admin(event): return
+
+        if not self._get_conf_bool("persona_use_life_scheduler_outfit", True):
+            yield event.chain_result([Plain("人设日程穿搭联动当前已关闭。")])
+            return
+
+        outfit = await self._get_life_scheduler_outfit_text()
+        if not outfit:
+            yield event.chain_result([Plain("当前没有读取到日程穿搭。请确认 astrbot_plugin_life_scheduler 已启用，并且今日日程已生成。")])
+            return
+
+        yield event.chain_result([Plain(f"当前会追加到人设描述的日程穿搭:\n{outfit}")])
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=4)
     async def on_batch_process_cmd(self, event: AstrMessageEvent, ctx=None):

@@ -418,6 +418,12 @@
         "hint": "详细描述Bot的外貌特征、穿着风格等。",
         "default": "一个可爱的二次元女孩"
     },
+    "persona_use_life_scheduler_outfit": {
+        "description": "【人设】联动每日日程穿搭",
+        "type": "bool",
+        "hint": "开启后，人设拍照会尝试读取 astrbot_plugin_life_scheduler 今日生成的 outfit，并临时追加到人设描述中，用于保持照片服装与日程穿搭一致。日程插件不存在或未生成时自动跳过。",
+        "default": true
+    },
     "persona_trigger_keywords": {
         "description": "【人设】触发关键词",
         "type": "list",
